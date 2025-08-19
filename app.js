@@ -9,7 +9,11 @@ app.use(logger("dev"));
 app.use(express.json());
 
 async function callSlotsApiBrowser() {
-  const browser = await puppeteer.launch({ headless: true });
+  const browser = await puppeteer.launch({
+  executablePath: '/usr/bin/chromium',
+  args: ['--no-sandbox', '--disable-setuid-sandbox']
+});
+
   const page = await browser.newPage();
 
   try {
