@@ -1,91 +1,122 @@
 let express = require("express");
 let logger = require("morgan");
 const puppeteer = require("puppeteer");
-const cron = require("node-cron");
-const { Client, LocalAuth } = require("whatsapp-web.js");
-const qrcode = require("qrcode-terminal");
+const cors = require("cors");
 
 let app = express();
+app.use(cors());
 app.use(logger("dev"));
-
-const client = new Client({
-  authStrategy: new LocalAuth({
-    clientId: "dev-client",
-    dataPath: "./.wwebjs_auth",
-  }),
-  puppeteer: {
-    headless: true,
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
-  },
-});
-
-client.on("qr", (qr) => {
-  console.log("⚡ Scan this QR only once:");
-  qrcode.generate(qr, { small: true });
-});
-
-client.on("ready", () => {
-  console.log("✅ WhatsApp client is ready! (Session loaded)");
-});
-
-client.on("authenticated", () => {
-  console.log("🔐 Session authenticated and will be saved to .wwebjs_auth");
-});
-
-client.initialize();
+app.use(express.json());
 
 async function callSlotsApiBrowser() {
   const browser = await puppeteer.launch({ headless: true });
   const page = await browser.newPage();
 
-  const data = await page.evaluate(async () => {
-    const res = await fetch("https://app.checkvisaslots.com/slots/v3", {
-      method: "GET",
-      headers: {
-        accept: "*/*",
-        "accept-language": "en-US,en;q=0.9",
-        extversion: "4.6.5.1",
-        priority: "u=1, i",
-        "sec-ch-ua":
-          '"Not;A=Brand";v="99", "Google Chrome";v="139", "Chromium";v="139"',
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": '"Windows"',
-        "sec-fetch-dest": "empty",
-        "sec-fetch-mode": "cors",
-        "sec-fetch-site": "cross-site",
-        "x-api-key": "KY1F21",
-      },
+  try {
+    const data = await page.evaluate(async () => {
+      const res = await fetch("https://app.checkvisaslots.com/slots/v3", {
+        method: "GET",
+        headers: {
+          accept: "*/*",
+          "accept-language": "en-US,en;q=0.9",
+          extversion: "4.6.5.1",
+          priority: "u=1, i",
+          "sec-ch-ua":
+            '"Not;A=Brand";v="99", "Google Chrome";v="139", "Chromium";v="139"',
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": '"Windows"',
+          "sec-fetch-dest": "empty",
+          "sec-fetch-mode": "cors",
+          "sec-fetch-site": "cross-site",
+          "x-api-key": "KY1F21",
+        },
+      });
+      return res.json();
     });
-    return res.json();
-  });
 
-  await browser.close();
-  return data;
+    await browser.close();
+    return data;
+  } catch (error) {
+    await browser.close();
+    throw error;
+  }
 }
 
-cron.schedule("* * * * *", async () => {
-  console.log("🔍 Checking slots...");
+app.get("/api/checkslot", async (req, res) => {
+  try {
+    console.log("🔍 Checking slots...");
 
-  const data = await callSlotsApiBrowser();
+    const data = await callSlotsApiBrowser();
 
-  const hasSlotVacLocation = data.slotDetails.filter(
-    (item) => item.visa_location.endsWith("VAC") && item.slots > 0
-  );
+    // Filter for VAC locations with available slots
+    const hasSlotVacLocation = data.slotDetails.filter(
+      (item) => item.visa_location.endsWith("VAC") && item.slots > 0
+    );
 
-  if (hasSlotVacLocation.length > 0) {
-    const number = "919173211901";
-    const chatId = number + "@c.us";
+    // Prepare response
+    const response = {
+      hasSlot: hasSlotVacLocation.length > 0,
+      data: hasSlotVacLocation.map((slot) => ({
+        visa_location: slot.visa_location,
+        slots: slot.slots,
+        createdon: slot.createdon,
+        imghash: slot.imghash
+      })),
+      userActivity: data.userActivity || null
+    };
 
-    const msg = `🚨 Slots Available!\n\n${hasSlotVacLocation
-      .map((s) => `${s.visa_location}: ${s.slots} slots`)
-      .join("\n")}`;
-
-    // Send WhatsApp alert
-    client
-      .sendMessage(chatId, msg)
-      .then(() => console.log("✅ WhatsApp alert sent"))
-      .catch((err) => console.error("❌ WhatsApp send error:", err));
+    console.log(`✅ Slots check completed. Found ${hasSlotVacLocation.length} locations with slots.`);
+    
+    res.json(response);
+  } catch (error) {
+    console.error("❌ Error checking slots:", error);
+    res.status(500).json({
+      hasSlot: false,
+      data: [],
+      userActivity: null,
+      error: "Failed to check slots"
+    });
   }
+});
+
+// Test endpoint with mock data
+app.get("/api/test", (req, res) => {
+  // Mock data based on your example
+  const mockResponse = {
+    hasSlot: true,
+    data: [
+      {
+        visa_location: "MUMBAI VAC",
+        slots: 3,
+        createdon: "Tue, 19 Aug 2025 09:53:58 GMT",
+        imghash: "W2K2X0d9p3e0o9L4f8"
+      },
+      {
+        visa_location: "CHENNAI VAC", 
+        slots: 2,
+        createdon: "Tue, 19 Aug 2025 09:53:25 GMT",
+        imghash: "N2Q2L0U923n088a5A0"
+      }
+    ],
+    userActivity: {
+      remaining: 414,
+      retrieve: 0,
+      slots: 25,
+      upload: 10
+    }
+  };
+
+  res.json(mockResponse);
+});
+
+// Health check endpoint
+app.get("/api/health", (req, res) => {
+  res.json({ status: "OK", timestamp: new Date().toISOString() });
+});
+
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
 });
 
 module.exports = app;
